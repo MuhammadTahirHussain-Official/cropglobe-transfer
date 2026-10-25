@@ -1,0 +1,10 @@
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+# training / Colab only:
+torch
+huggingface_hub
+# optional cross-check of the mixed model (installed automatically in the closing cell if missing):
+statsmodels
