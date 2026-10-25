@@ -48,6 +48,3 @@ python scripts/run_all_tests.py            # Level 1: 72 tests, Level 2: 77 test
 
 To run an experiment, open the notebook of your choice in Google Colab (GPU) and follow the README of that level. The dry-run scripts in `*/tests/` replace the network by a logistic-regression stand-in: they test the **plumbing, not the science**. The PyTorch training code, the GPU path and the loading of the real data are exercised only on Colab/Kaggle.
 
-## What is not in the repository
-
-Data (downloaded by the notebooks), results (`results.csv`, `runs/`, `manifest.json`: produced by the runs, frozen by SHA-256 in the closing cells), reports and PDFs. `.gitignore` keeps them out.
