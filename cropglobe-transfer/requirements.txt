@@ -1,0 +1,12 @@
+# Needed for the tests (README Use 1) and the paper reproduction (Use 2)
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+# Needed only for training on Colab or Kaggle (Use 3)
+torch
+huggingface_hub
+geopandas          # Level 1 only: assigns US samples to states
+# Optional: cross-check of the mixed model (installed automatically by the closing cells if missing)
+statsmodels
