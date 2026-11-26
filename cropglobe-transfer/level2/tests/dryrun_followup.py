@@ -1,0 +1,77 @@
+import os, sys
+ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+os.chdir(os.path.join(ROOT, 'src', 'cells'))      # the cell files are read by relative name
+# synthetic END-TO-END dry run of the Level 2 notebook logic (no torch: a logistic-regression stand-in replaces the network). It tests the PLUMBING, not the science.
+import tempfile, os, io, contextlib, sys, json, numpy as np, pandas as pd
+MODE = sys.argv[1] if len(sys.argv) > 1 else 'plan'          # 'plan' = real region/crop counts, real config, plan only | 'run' = reduced budgets, all 5 seeds, gate + run + closing
+ns = {'__name__': '__main__'}
+def X(f, src=None): exec(compile(src or open(f).read(), f, 'exec'), ns)
+X('c02_config.py'); X('c04_core.py')
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf): X('c07_tests.py'); X('c09_data.py')
+assert ns['TESTS_A_PASSED']
+L2_HASH_PLACEHOLDER = None
+X('c02f_followup.py')
+td = tempfile.mkdtemp(); ns.update(OUT_DIR=os.path.join(td, 'outputs', 'phase3_level2_fra'), GIT_COMMIT=ns['EXPECTED_CROPNET_COMMIT']); os.makedirs(ns['OUT_DIR'])
+src = open('c11_acquire.py').read(); X('ns_guard', src[src.index('# ---- namespace guard'):src.index('check_namespace(write=False)\nprint(')])
+# ---- synthetic French source with the REAL (pre-dedup) region x crop counts; targets small
+rc = pd.read_csv(os.path.join(ROOT, 'data', 'fra_region_crop.csv')).iloc[:13]
+rc['wheat'] = rc['springwheat'] + rc['winterwheat']; rc['region_code'] = rc['region_code'].astype(int).astype(str)
+rows = []
+for r in rc.itertuples():
+    for c in ('corn', 'soybeans', 'wheat', 'rice', 'other'):
+        rows += [(r.region_code, c)] * int(getattr(r, c))
+st = np.array([a for a, b in rows]); cr = np.array([b for a, b in rows]); rng = np.random.default_rng(0); perm = rng.permutation(len(st)); st, cr = st[perm], cr[perm]
+yid = np.array([ns['CROP_ID'][c] for c in cr]); mu = rng.normal(0, 1, (7, 730)).astype(np.float32)
+feats = lambda y: (mu[y] + rng.normal(0, 1.5, (len(y), 730))).astype(np.float32).reshape(len(y), 1, 10, 73)
+meta = pd.DataFrame({'npz_row': np.arange(len(st)) * 2, 'crop_id': yid, 'state': st, 'crop': cr}); INFO = {}; FEAT = {ns['SOURCE']: feats(yid)}; LBL = {ns['SOURCE']: yid}
+TG = ['ARG']
+for t in TG:
+    cls = ns['DEFINED_CLASSES'][t]                                   # the label set each target really has (config)
+    y = np.array([ns['CROP_ID'][c] for c in cls for _ in range(120)]); FEAT[t] = feats(y); LBL[t] = y; INFO[t] = dict(keep=np.arange(len(y)) * 3)
+
+ns.update(meta=meta, INFO=INFO, FEATURES=FEAT, NPZ_LBL=LBL, TESTS_PASSED=True, SMOKE_OK=True, IN_NOTEBOOK=False, GEOGRAPHY_OBSERVED={}, FRA_META_REPORT=dict(assigned=len(st), rows_per_region={}), PLAN_NOTE_ARG='x', AUTO_MODE=True, AUTO_MAX_HOURS=None)
+ns['APPROVED']['plan'] = True
+with contextlib.redirect_stdout(buf): X('c15_plan.py')
+cells = ns['PLAN_CELLS_RUN']; g = ns['PLAN_GRID']
+print('MODE', MODE, '| planned cells', len(cells), '| runs per seed', {s: len(ns['plan_for_seed'](s)) for s in ns['SEEDS']}, '| total', sum(len(ns['plan_for_seed'](s)) for s in ns['SEEDS']))
+pd.set_option('display.width', 250)
+print(g[['target', 'budget', 'k', 'feasible', 'pool_size', 'n_combos', 'n_total_combos']].to_string(index=False) if MODE == 'plan' else '')
+if MODE == 'plan':
+    h = ns['design_hash'](); print('design hash (synthetic table, indicative only):', h[:16]); sys.exit()
+from sklearn.linear_model import LogisticRegression
+ns['EVAL_X'] = {t: FEAT[t] for t in TG}; ns['EVAL_Y'] = LBL
+def fit(Xtr, ytr, Xva, yva, seed, ep=None, aug='off'):
+    m = LogisticRegression(max_iter=40, C=0.05).fit(Xtr.reshape(len(Xtr), -1), ytr); v = float(ns['f1_score'](yva, m.predict(Xva.reshape(len(Xva), -1)), average='macro'))
+    return dict(model=m, info=dict(val_f1=v, best_epoch=7, epochs_run=22, stop_reason='early_stop_patience', restore_delta=0.0, history=[v]))
+ns['FIT_FN'] = fit; ns['PREDICT_FN'] = lambda m, X_: m.predict(X_.reshape(len(X_), -1))
+# 1) the run cell must REFUSE before approval
+try:
+    with contextlib.redirect_stdout(buf): X('c19_run.py')
+    print('GATE FAIL: ran without approval'); sys.exit(1)
+except Exception as e: print('1) run refused before approval ->', type(e).__name__, str(e)[:90])
+assert not os.path.exists(os.path.join(ns['OUT_DIR'], 'results.csv')), 'results written before approval'
+# 2) wrong hash refused
+ns.update(INSTRUCTOR_APPROVED=True, APPROVED_DESIGN_SHA256='0' * 64)
+try:
+    with contextlib.redirect_stdout(buf): X('c19_run.py')
+    print('GATE FAIL: ran with wrong hash'); sys.exit(1)
+except Exception as e: print('2) run refused with a wrong hash ->', type(e).__name__, str(e)[:90])
+# 3) approved hash -> runs
+ns['APPROVED_DESIGN_SHA256'] = ns['design_hash']()
+with contextlib.redirect_stdout(buf): X('c19_run.py')
+csv = os.path.join(ns['OUT_DIR'], 'results.csv'); d = ns['load_results'](csv); d['seed'] = pd.to_numeric(d.seed)
+print('3) approved run ->', ns.get('AUTO_RESULT'), '| ok', int((d.status == 'ok').sum()), '| per seed', d.groupby('seed').size().to_dict(), '| expected', {s: len(ns['plan_for_seed'](s)) for s in ns['SEEDS']})
+bad = d[d.states.astype(str).apply(lambda x: bool({'75', '76'} & set(x.split('-'))))]
+print('4) runs whose region combination contains 75 or 76:', len(bad)); assert len(bad) == 0 and set(d.target) == {'ARG'} and set(d.k.astype(int)) <= {1, 2, 4} and set(d.budget.astype(int)) <= {1000, 2000} and set(d.seed) == {5, 6, 7, 8, 9}
+assert all(not ({'75', '76'} & set(c['states'])) for c in ns['PLAN_CELLS_RUN']); assert ns['plan_consistency_check']()['ok']
+used = set(); [used.update(np.load(os.path.join(ns['OUT_DIR'], 'runs', f))['train_idx'].tolist()) if 'train_idx' in np.load(os.path.join(ns['OUT_DIR'], 'runs', f)).files else None for f in os.listdir(os.path.join(ns['OUT_DIR'], 'runs'))[:5]]
+import matplotlib; matplotlib.use('Agg')
+try:
+    with contextlib.redirect_stdout(buf): X('c21_summary.py')
+    print('4b) summary cell ran on the follow-up results')
+except Exception as e: import traceback; traceback.print_exc(); print('SUMMARY FAILED', repr(e)[:300]); sys.exit(1)
+X('c24_level2_analysis.py'); X('c24f_followup_analysis.py')
+out = ns['closing_report_followup'](csv, os.path.join(ns['OUT_DIR'], 'closing'))
+print('5) follow-up closing ->', None if out is None else {k: out[k]['verdict'] for k in ('FC1', 'FC2')}); assert out is not None and os.path.exists(os.path.join(ns['OUT_DIR'], 'closing', 'FREEZE_level2.json'))
+print('FOLLOW-UP DRY RUN OK')
